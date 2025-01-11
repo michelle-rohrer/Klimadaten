@@ -1,0 +1,239 @@
+```{r}
+#Laden der Pakete
+library("tidyverse")
+library("shiny")
+library("leaflet")
+```
+
+```{r}
+#CSV Datei für die Plots. CSv Datei mit den Durchschnittswerten pro Land
+new_df <- read.csv("new_df.csv")
+new_df <- new_df[rowSums(is.na(new_df)) < ncol(new_df), ]
+```
+
+
+
+
+```{r}
+
+
+
+ui <- fluidPage(
+  titlePanel(""),
+    fluidRow(
+    column(width = 3),
+    column(width = 6,
+      tags$div(
+        style = "padding: 5px; text-align: center;",
+        tags$p(style = "font-size: 30px; margin-bottom: 30px;","Trotz abnehmender Anzahl an Regentagen erleben wir heutzutage extremere Regenfälle!")
+        
+        
+      )
+    ),
+    column(width = 3),
+    column(width = 4),
+    column(width = 4,
+           tags$div(
+        style = "padding: 5px; text-align: center;",
+        tags$p(style = "margin-bottom: 30px;","Die interaktive Karte zeigt verschiedene Überschwemmungen in Europa, die in den letzten 20 Jahren aufgrund von Stürmen (rot) oder starken Regenfällen (blau) aufgetreten sind.
+Ein Blick auf unser Dashboard verdeutlicht außerdem die Veränderungen von normalen zu extremen Regentagen. So wird beispielsweise deutlich, dass Österreich im Jahr 2002 eine überdurchschnittlich hohe Anzahl an starken Regentagen im August verzeichnete. Durch einen Klick auf das in Östereich positioniete Fähnchen erfahrt ihr, was in die Folgen in diesem Monat für die Umgebung war.
+"), imageOutput("image11", width = "100%", height = "400px")
+        
+      )
+           ),
+    column(width = 4)
+  ),
+  
+  fluidRow(
+    
+    column(width = 3),
+        
+    column(width = 4,
+              tags$p(style = "front-size: 20px;", "Klicke auf eine Fahne um ein Ereigniss zu sehen")),
+    column(width = 7,
+      
+      imageOutput("image1", width = "100%", height = "1000px")
+    ),
+    column(width = 5,
+      leafletOutput("map", width = "100%", height = "900px")
+    )
+  ),
+  fluidRow(
+    column(width = 3),
+    column(width = 6,
+      tags$div(
+        style = "margin-top: 40px; padding: 5px; text-align: center;",
+        tags$p(style = "font-size: 30px;","Prognose"),
+        plotOutput("plot2", width = "100%", height = "500px"),
+        tags$p("Die Analyse der leichten Regentage in Europa über die letzten 53 Jahre zeigt eine interessante Entwicklung. Der Begriff 'leichte Regentage' bezieht sich auf Tage, an denen die Niederschlagsmenge mindestens 1mm pro 24 Stunden beträgt. Die grafische Darstellung zeigt die Abweichung Regentage vom langjährigen Durchschnitt.
+Die blauen Balken stellen Jahre dar, in denen die Anzahl der leichten Regentage über dem Durchschnitt lag, während die roten Balken Jahre unter dem Durchschnitt markieren.
+Insgesamt ist ein leichter abnehmender Trend erkennbar, was darauf hindeutet, dass die Anzahl der leichten Regentage im Laufe der Zeit abgenommen hat.
+"),
+        plotOutput("plot1", width = "100%", height = "500px"),
+        tags$p("Starke Regentage sind Tage, an welche es mehr geregnet hat als an 99 Prozent der anderen Tage an dieser Messstation, seit Messbeginn.
+Jedes Jahr, in dem die Anzahl der R99p-Tage über dem Durchschnitt liegt, wird durch blaue Balken dargestellt, während rote Balken Jahre mit unterdurchschnittlicher Anzahl darstellen.
+Die grafische Darstellung zeigt einen deutlichen zunehmenden Trend in der Häufigkeit dieser starken Regentage über die letzten 53 Jahre.
+"),     
+        tags$p(style = "font-size: 15px; font-weight: bold;", "Forscher unterstützen diese Thesen ebenfalls:"),
+        tags$p("Forscher weltweit bestätigen, dass extreme Wetterereignisse in Häufigkeit und Intensität zunehmen, was durch die Erderwärmung begünstigt wird. Die Hauptursache dafür ist die erhöhte Wasserdampfkapazität einer wärmeren Atmosphäre, die zu intensiveren Niederschlägen führen kann. Diese Entwicklungen sind insbesondere in Europa spürbar, wo die ökonomischen Verluste durch Hochwasser beträchtlich sind.
+Nach Untersuchungen von Dottori et al. (2018) belaufen sich die ökonomischen Verluste durch Hochwasser in Europa auf etwa 22 % der globalen Hochwasserschäden, was jährlich etwa 24,2 Milliarden Euro entspricht. Prognosen zeigen, dass diese Verluste mit einer globalen Erwärmung um 3 °C auf mehr als das Zehnfache ansteigen könnten. Die Wahrscheinlichkeit und Intensität von extremen Niederschlagsereignissen werden dabei weiter zunehmen, wie Forscher vom Karlsruher Institut für Technologie bestätigen.
+Darüber hinaus zeigen die Daten, dass die Atmosphäre bei einer Erwärmung um nur 1 °C etwa 7 % mehr Wasserdampf aufnehmen kann. Diese erhöhte Wasseraufnahmefähigkeit führt zu häufigeren und intensiveren Starkregenereignissen. Zudem hat das veränderte Weltklima zur Folge, dass sich Großwetterlagen häufiger länger an einem Ort festsetzen, was die Wahrscheinlichkeit extremer Wetterereignisse weiter erhöht.
+")
+      )
+    ),
+    column(width = 3)
+  )
+)
+
+
+
+# Server Teil für die Shiny-App. Hier wird definiert wan welche Daten wo angezeigt werden
+
+server <- function(input, output, session) {
+  coordinates <- data.frame(
+  lat = c(43.095, 60.02916, 48.333, 46.70497, 53.94853, 50.787, 55.750446, 37.1583, 50.6250, 48.516),
+  lng = c(-0.045278, 11.18186, 14.2833, 8.60253, -0.88954, 13.75664, 37.617493, 38.7917, 5.5907, 22.15),
+  image = paste0("image", 1:10, ".jpg"),
+  color = c("blue", "red", "blue", "blue", "blue", "blue", "red","blue","blue", "blue" )
+)
+  
+  createCustomIcons <- function(color) {
+  awesomeIcons(
+    icon = 'flag',
+    iconColor = color,
+    markerColor = "white",
+    library = 'glyphicon'
+      # Adjust the icon size as needed
+  )
+}
+  
+  output$map <- renderLeaflet({
+    leaflet(
+      options = leafletOptions(minZoom = 4,
+                               maxZoom = 4,
+                               zoomControl = TRUE,
+                               dragging = TRUE)
+    ) %>%
+      setView(lng = 10, lat = 50, zoom = 3.5) %>%
+      addProviderTiles("CartoDB.Positron") %>%
+      addAwesomeMarkers(data = coordinates,
+                        ~lng, ~lat,
+                        icon = ~createCustomIcons(color),
+                        layerId = ~image
+      )
+  })
+  
+  observeEvent(input$map_marker_click, {
+    clicked_marker <- input$map_marker_click
+    image_path <- paste0("www/", clicked_marker$id)
+    
+    output$image1 <- renderImage({
+      list(src = image_path,
+           contentType = "image/jpeg",
+           width = "100%",
+           height = "auto")
+    }, deleteFile = FALSE)
+  })
+  output$plot1 <- renderPlot({
+    
+
+
+     average_regentage_aller_Länder3 <- new_df %>%
+        group_by(Jahr) %>%
+        summarise(Durchschnitt_Regentage_aller_Länder3 = mean(Regentage_pro_Jahr_R99p, na.rm = TRUE))
+
+
+
+
+
+     land_durchschnitt3 <- mean(average_regentage_aller_Länder3$Durchschnitt_Regentage_aller_Länder3, na.rm = TRUE)
+
+
+     average_regentage_aller_Länder3$Abweichung_vom_schnitt3 <- average_regentage_aller_Länder3$Durchschnitt_Regentage_aller_Länder3 - land_durchschnitt3
+
+
+     ggplot(average_regentage_aller_Länder3, aes(x = Jahr, y = Abweichung_vom_schnitt3)) +
+       geom_bar(stat = "identity", aes(fill = Abweichung_vom_schnitt3 > 0), width = 0.7) +
+       geom_hline(aes(yintercept = 0, color = "Schnitt"), linetype = "solid") +
+       geom_smooth(method = "lm", se = FALSE, linetype = "dashed", size = 1, aes(color = "Trendlinie")) +
+       labs(title = "Abweichung der Regentage, in Europa bei R99p, vom Gesamtdurchschnitt über alle Jahre ", x = "Jahr", y = "Abweichung vom Durchschnitt über alle Jahre") +
+          scale_fill_manual(values = c( "#FB9A99","#A6CEE3"),
+                    name = "",
+                    labels = c( "Unter dem Schnitt","Über dem Schnitt")) +
+          scale_color_manual(values = c( "black","purple"),
+                     name = "",
+                     labels = c(paste("Gesamtdurchschnitt von 1970-2023:", round(land_durchschnitt3,2), "Regentage"),"Trendlinie"))+
+           theme(axis.text.x = element_text(size = 12, face = "bold"),
+            axis.text.y = element_text(size = 12, face = "bold"),
+            plot.title = element_text(size = 14, face = "bold"),
+            axis.title.x = element_text(size = 14),  # X-Achsen-Beschriftungsgröße
+            axis.title.y = element_text(size = 14),
+            legend.title = element_text(size = 14),  # Legenden-Titelgröße
+            legend.text = element_text(size = 12),
+            legend.position = "bottom")
+  })
+  output$plot2 <- renderPlot({
+    
+
+
+     average_regentage_aller_Länder3 <- new_df %>%
+        group_by(Jahr) %>%
+        summarise(Durchschnitt_Regentage_aller_Länder3 = mean(Regentage_pro_Jahr_1mm, na.rm = TRUE))
+
+
+
+
+
+     land_durchschnitt3 <- mean(average_regentage_aller_Länder3$Durchschnitt_Regentage_aller_Länder3, na.rm = TRUE)
+
+
+     average_regentage_aller_Länder3$Abweichung_vom_schnitt3 <- average_regentage_aller_Länder3$Durchschnitt_Regentage_aller_Länder3 - land_durchschnitt3
+
+
+     ggplot(average_regentage_aller_Länder3, aes(x = Jahr, y = Abweichung_vom_schnitt3)) +
+       geom_bar(stat = "identity", aes(fill = Abweichung_vom_schnitt3 > 0), width = 0.7) +
+       geom_hline(aes(yintercept = 0, color = "Schnitt"), linetype = "solid") +
+       geom_smooth(method = "lm", se = FALSE, linetype = "dashed", size = 1, aes(color = "Trendlinie")) +
+       labs(title = "Abweichung der Regentage, in Europa bei 1mm, vom Gesamtdurchschnitt über alle Jahre ", x = "Jahr", y = "Abweichung vom Durchschnitt über alle Jahre") +
+          scale_fill_manual(values = c( "#FB9A99","#A6CEE3"),
+                    name = "",
+                    labels = c( "Unter dem Schnitt","Über dem Schnitt")) +
+          scale_color_manual(values = c( "black","purple"),
+                     name = "",
+                     labels = c(paste("Gesamtdurchschnitt von 1970-2023:", round(land_durchschnitt3,2), "Regentage"),"Trendlinie"))+
+           theme(axis.text.x = element_text(size = 12, face = "bold"),
+            axis.text.y = element_text(size = 12, face = "bold"),
+            plot.title = element_text(size = 14, face = "bold"),
+            axis.title.x = element_text(size = 14),  # X-Achsen-Beschriftungsgröße
+            axis.title.y = element_text(size = 14),
+            legend.title = element_text(size = 14),  # Legenden-Titelgröße
+            legend.text = element_text(size = 12),
+            legend.position = "bottom")
+})
+  
+  output$image11 <- renderImage({
+    list(
+      src = "www/image11.jpg",
+      contentType = 'image/jpeg',
+      width = '100%',  
+      height = '300px' 
+    )
+  })
+
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  }
+
+shinyApp(ui, server)
+
+
+```
+
+

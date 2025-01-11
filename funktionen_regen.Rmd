@@ -1,0 +1,1009 @@
+
+```{r}
+
+#Laden der Pakete
+library("tidyverse")
+
+```
+
+
+```{r}
+
+#Umwandlung der Textdateien 10mm in ein Dataframe
+read_and_process_regendaten_10 <- function(ordnerpfad) {
+  dms_to_dd <- function(coord) {
+    parts <- strsplit(coord, ":")[[1]]
+    deg <- as.numeric(parts[1])
+    min <- as.numeric(parts[2])
+    sec <- as.numeric(parts[3])
+    if (deg < 0) {
+        deg <- abs(deg)  # Minuszeichen entfernen
+    }
+    dd <- deg + (min / 60) + (sec / 3600)
+    return(dd)
+  }
+  # Innere Funktion zur Verarbeitung einer Datei
+  verarbeite_datei <- function(dateipfad) {
+    inhalt <- readLines(dateipfad, encoding = "UTF-8")
+    ergebnis_regentage <- regexpr("^\\s*\\d+\\s+(\\d{4})\\s+(\\d+)\\s+", inhalt)
+    
+    if (any(ergebnis_regentage != -1)) {
+      jahre <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\s{2})\\d{4}(?=\\s)")
+      regentage <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\d{4}\\s)\\d+")
+      regentage <- ifelse(regentage != "0", substr(regentage, 1, nchar(regentage) - 2), regentage)
+      regentage <- as.numeric(regentage)
+      
+      jahre <- as.numeric(jahre)
+      index <- jahre >= 1970
+      jahre <- jahre[index]
+      regentage <- regentage[index]
+      
+      monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+      start_pos <- c(68, 76, 84, 92, 102, 108, 116, 124, 132, 140, 148, 156)
+      stop_pos <- c(74, 82, 90, 98, 106, 114, 122, 130, 138, 146, 154, 162)
+      monat_regentage <- lapply(seq_along(monate), function(i) {
+        regentage <- substr(inhalt[ergebnis_regentage != -1], start = start_pos[i], stop = stop_pos[i])
+        regentage <- as.numeric(regentage)
+        regentage[index]
+      })
+      
+      df_regentage <- data.frame(Jahr = jahre, Regentage_pro_Jahr_10mm = regentage)
+      names(df_regentage) <- c("Jahr", "Regentage_pro_Jahr_10mm")
+      for (i in seq_along(monate)) {
+        df_regentage[[paste0(monate[i], "_Regentage_10mm")]] <- monat_regentage[[i]]
+      }
+      
+      df_regentage <- df_regentage[complete.cases(df_regentage), ]
+      
+      ergebnis_land <- regexpr("STATION ([A-Za-z]+(?: [A-Za-z]+)?)", inhalt)
+      ergebnis_name <- regexpr("\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}", inhalt)
+      ergebnis_staid <- regexpr("STAID:\\s*(\\d+)", inhalt)
+      ergebnis_latitude <- regexpr("LATITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      ergebnis_longitude <- regexpr("LONGITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      
+      if (any(ergebnis_land != -1) & any(ergebnis_staid != -1) & any(ergebnis_name != -1) & any(ergebnis_latitude != -1) & any(ergebnis_longitude != -1)) {
+        land <- str_extract(inhalt[ergebnis_land != -1], "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")
+        land <- str_match(land, "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")[, 2]
+        name <- str_extract(inhalt[ergebnis_name != -1], "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")
+        name <- str_match(name, "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")[, 2]
+        staid <- str_extract(inhalt[ergebnis_staid != -1], "STAID:\\s*(\\d+)")
+        staid <- str_match(staid, "STAID:\\s*(\\d+)")[, 2]
+        latitude <- str_extract(inhalt[ergebnis_latitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        longitude <- str_extract(inhalt[ergebnis_longitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        
+        df_metadata <- data.frame(Land = land, Station_ID = staid, Station_Name = name, Breitengrad = latitude, Längengrad = longitude)
+        merged_df <- merge(df_regentage, df_metadata, by = NULL)
+        
+        return(merged_df)
+      } else {
+        return("Das Land oder die Station ID konnte nicht gefunden werden.")
+      }
+    } else {
+      return("Regentage konnten nicht gefunden werden.")
+    }
+  }
+  
+  alle_dateien <- list.files(ordnerpfad, full.names = TRUE)
+  alle_dfs <- lapply(alle_dateien, verarbeite_datei)
+  alle_dfs <- Filter(function(x) inherits(x, "data.frame"), alle_dfs)
+  
+  if (length(alle_dfs) > 0) {
+    gesamt_df <- bind_rows(alle_dfs)
+    
+    # Filtern aller Zeilen mit -99999 da sie fehlende Messdaten bedeuten
+    gesamt_df_clean <- gesamt_df %>% 
+      filter_all(all_vars(. != -99999))
+    fertig <- gesamt_df_clean %>% 
+      filter_all(all_vars(. != -9999))
+    # Liste der Monate
+    monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+
+    # Schleife über die Monate
+    for (monat in monate) {
+    # Spaltenname für den aktuellen Monat
+    spaltenname <- paste0(monat, "_Regentage_10mm")
+  
+    # Wenn die Spalte existiert
+    if (spaltenname %in% colnames(fertig)) {
+    # Bedingte Anpassung der Werte
+    fertig[[spaltenname]] <- ifelse(fertig[[spaltenname]] != "0",
+                                    substr(fertig[[spaltenname]], 1, nchar(fertig[[spaltenname]]) - 2),
+                                    fertig[[spaltenname]])
+      }
+    }
+    # Liste der Länder, die gelöscht werden sollen da sie nicht in Europ sind
+    zu_loeschende_laender <- c("ISRAEL", "KAZAKHSTAN", "TURKMENISTAN", "EGYPT", "ARMENIA", "ALGERIA", 
+                               "MOROCCO", "TUNISIA", "AZERBAIJAN", "LIBYAN ARAB", "SYRIAN ARAB", 
+                               "UZBEKISTAN", "GEORGIA", "IRAN", "KYRGYZSTAN", "TAJIKISTAN")
+    
+    # Daten ohne die genannten Länder
+    fertig <- subset(fertig, !(Land %in% zu_loeschende_laender))
+    
+    # Aktualisieren der Spalte "Land"
+    fertig$Land <- ifelse(fertig$Land == "T", "TURKEY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "SVALBARD AND", "NORWAY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "BOSNIA AND", "BOSNIA AND HERZEGOVINA", fertig$Land)
+    
+    # Konvertierung der Breitengradspalte
+    fertig$Breitengrad_d <- sapply(fertig$Breitengrad, dms_to_dd)
+    
+    # Konvertierung der Längengradspalte
+    fertig$Längengrad_d <- sapply(fertig$Längengrad, dms_to_dd)
+    
+    fertig$Längengrad_d <- ifelse(grepl("-", fertig$Längengrad), paste0("-", fertig$Längengrad_d), fertig$Längengrad_d)
+    replace_minus <- function(value) {
+    ifelse(startsWith(value, "--"), paste0("-", substr(value, 3, nchar(value))), value)
+}
+
+    # Anwendung der Funktion auf die Spalte 'Werte' mit dplyr
+    fertig <- fertig %>%
+      mutate(Längengrad_d = replace_minus(Längengrad_d))
+    fertig <- fertig %>%
+      select(-Längengrad, -Breitengrad)
+    return(fertig)
+  } else {
+    print("Keine gültigen Dataframes gefunden.")
+    return(NULL)
+  }
+}
+
+# Verwendung der Funktion
+gesamt_df_10 <- read_and_process_regendaten_10("Regendaten_10/")
+
+```
+
+
+```{r}
+#Gleiche Funktion für die Textdateien 20mm
+read_and_process_regendaten_20 <- function(ordnerpfad) {
+  dms_to_dd <- function(coord) {
+    parts <- strsplit(coord, ":")[[1]]
+    deg <- as.numeric(parts[1])
+    min <- as.numeric(parts[2])
+    sec <- as.numeric(parts[3])
+    if (deg < 0) {
+        deg <- abs(deg)  
+    }
+    dd <- deg + (min / 60) + (sec / 3600)
+    return(dd)
+  }
+  
+  verarbeite_datei <- function(dateipfad) {
+    inhalt <- readLines(dateipfad, encoding = "UTF-8")
+    ergebnis_regentage <- regexpr("^\\s*\\d+\\s+(\\d{4})\\s+(\\d+)\\s+", inhalt)
+    
+    if (any(ergebnis_regentage != -1)) {
+      jahre <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\s{2})\\d{4}(?=\\s)")
+      regentage <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\d{4}\\s)\\d+")
+      regentage <- ifelse(regentage != "0", substr(regentage, 1, nchar(regentage) - 2), regentage)
+      regentage <- as.numeric(regentage)
+      
+      jahre <- as.numeric(jahre)
+      index <- jahre >= 1970
+      jahre <- jahre[index]
+      regentage <- regentage[index]
+      
+      monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+      start_pos <- c(68, 76, 84, 92, 102, 108, 116, 124, 132, 140, 148, 156)
+      stop_pos <- c(74, 82, 90, 98, 106, 114, 122, 130, 138, 146, 154, 162)
+      monat_regentage <- lapply(seq_along(monate), function(i) {
+        regentage <- substr(inhalt[ergebnis_regentage != -1], start = start_pos[i], stop = stop_pos[i])
+        regentage <- as.numeric(regentage)
+        regentage[index]
+      })
+      
+      df_regentage <- data.frame(Jahr = jahre, Regentage_pro_Jahr_20mm = regentage)
+      names(df_regentage) <- c("Jahr", "Regentage_pro_Jahr_20mm")
+      for (i in seq_along(monate)) {
+        df_regentage[[paste0(monate[i], "_Regentage_20mm")]] <- monat_regentage[[i]]
+      }
+      
+      df_regentage <- df_regentage[complete.cases(df_regentage), ]
+      
+      ergebnis_land <- regexpr("STATION ([A-Za-z]+(?: [A-Za-z]+)?)", inhalt)
+      ergebnis_name <- regexpr("\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}", inhalt)
+      ergebnis_staid <- regexpr("STAID:\\s*(\\d+)", inhalt)
+      ergebnis_latitude <- regexpr("LATITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      ergebnis_longitude <- regexpr("LONGITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      
+      if (any(ergebnis_land != -1) & any(ergebnis_staid != -1) & any(ergebnis_name != -1) & any(ergebnis_latitude != -1) & any(ergebnis_longitude != -1)) {
+        land <- str_extract(inhalt[ergebnis_land != -1], "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")
+        land <- str_match(land, "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")[, 2]
+        name <- str_extract(inhalt[ergebnis_name != -1], "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")
+        name <- str_match(name, "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")[, 2]
+        staid <- str_extract(inhalt[ergebnis_staid != -1], "STAID:\\s*(\\d+)")
+        staid <- str_match(staid, "STAID:\\s*(\\d+)")[, 2]
+        latitude <- str_extract(inhalt[ergebnis_latitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        longitude <- str_extract(inhalt[ergebnis_longitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        
+        df_metadata <- data.frame(Land = land, Station_ID = staid, Station_Name = name, Breitengrad = latitude, Längengrad = longitude)
+        merged_df <- merge(df_regentage, df_metadata, by = NULL)
+        
+        return(merged_df)
+      } else {
+        return("Das Land oder die Station ID konnte nicht gefunden werden.")
+      }
+    } else {
+      return("Regentage konnten nicht gefunden werden.")
+    }
+  }
+  
+  alle_dateien <- list.files(ordnerpfad, full.names = TRUE)
+  alle_dfs <- lapply(alle_dateien, verarbeite_datei)
+  alle_dfs <- Filter(function(x) inherits(x, "data.frame"), alle_dfs)
+  
+  if (length(alle_dfs) > 0) {
+    gesamt_df <- bind_rows(alle_dfs)
+    
+    
+    gesamt_df_clean <- gesamt_df %>% 
+      filter_all(all_vars(. != -99999))
+    fertig <- gesamt_df_clean %>% 
+      filter_all(all_vars(. != -9999))
+    
+    monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+
+    
+    for (monat in monate) {
+   
+    spaltenname <- paste0(monat, "_Regentage_20mm")
+  
+    
+    if (spaltenname %in% colnames(fertig)) {
+    
+    fertig[[spaltenname]] <- ifelse(fertig[[spaltenname]] != "0",
+                                    substr(fertig[[spaltenname]], 1, nchar(fertig[[spaltenname]]) - 2),
+                                    fertig[[spaltenname]])
+      }
+    }
+   
+    zu_loeschende_laender <- c("ISRAEL", "KAZAKHSTAN", "TURKMENISTAN", "EGYPT", "ARMENIA", "ALGERIA", 
+                               "MOROCCO", "TUNISIA", "AZERBAIJAN", "LIBYAN ARAB", "SYRIAN ARAB", 
+                               "UZBEKISTAN", "GEORGIA", "IRAN", "KYRGYZSTAN", "TAJIKISTAN")
+    
+    
+    fertig <- subset(fertig, !(Land %in% zu_loeschende_laender))
+    
+    
+    fertig$Land <- ifelse(fertig$Land == "T", "TURKEY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "SVALBARD AND", "NORWAY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "BOSNIA AND", "BOSNIA AND HERZEGOVINA", fertig$Land)
+    
+    
+    fertig$Breitengrad_d <- sapply(fertig$Breitengrad, dms_to_dd)
+    
+   
+    fertig$Längengrad_d <- sapply(fertig$Längengrad, dms_to_dd)
+    
+    fertig$Längengrad_d <- ifelse(grepl("-", fertig$Längengrad), paste0("-", fertig$Längengrad_d), fertig$Längengrad_d)
+    replace_minus <- function(value) {
+    ifelse(startsWith(value, "--"), paste0("-", substr(value, 3, nchar(value))), value)
+}
+
+    
+    fertig <- fertig %>%
+      mutate(Längengrad_d = replace_minus(Längengrad_d))
+    fertig <- fertig %>%
+      select(-Längengrad, -Breitengrad)
+    return(fertig)
+  } else {
+    print("Keine gültigen Dataframes gefunden.")
+    return(NULL)
+  }
+}
+
+
+gesamt_df_20 <- read_and_process_regendaten_20("Regendaten_20/")
+
+```
+
+
+```{r}
+#Gleiche Funktion für die Textdatein 1mm
+read_and_process_regendaten_1 <- function(ordnerpfad) {
+  dms_to_dd <- function(coord) {
+    parts <- strsplit(coord, ":")[[1]]
+    deg <- as.numeric(parts[1])
+    min <- as.numeric(parts[2])
+    sec <- as.numeric(parts[3])
+    if (deg < 0) {
+        deg <- abs(deg)  
+    }
+    dd <- deg + (min / 60) + (sec / 3600)
+    return(dd)
+  }
+  
+  verarbeite_datei <- function(dateipfad) {
+    inhalt <- readLines(dateipfad, encoding = "UTF-8")
+    ergebnis_regentage <- regexpr("^\\s*\\d+\\s+(\\d{4})\\s+(\\d+)\\s+", inhalt)
+    
+    if (any(ergebnis_regentage != -1)) {
+      jahre <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\s{2})\\d{4}(?=\\s)")
+      regentage <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\d{4}\\s)\\d+")
+      regentage <- ifelse(regentage != "0", substr(regentage, 1, nchar(regentage) - 2), regentage)
+      regentage <- as.numeric(regentage)
+      
+      jahre <- as.numeric(jahre)
+      index <- jahre >= 1970
+      jahre <- jahre[index]
+      regentage <- regentage[index]
+      
+      monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+      start_pos <- c(68, 76, 84, 92, 102, 108, 116, 124, 132, 140, 148, 156)
+      stop_pos <- c(74, 82, 90, 98, 106, 114, 122, 130, 138, 146, 154, 162)
+      monat_regentage <- lapply(seq_along(monate), function(i) {
+        regentage <- substr(inhalt[ergebnis_regentage != -1], start = start_pos[i], stop = stop_pos[i])
+        regentage <- as.numeric(regentage)
+        regentage[index]
+      })
+      
+      df_regentage <- data.frame(Jahr = jahre, Regentage_pro_Jahr_1mm = regentage)
+      names(df_regentage) <- c("Jahr", "Regentage_pro_Jahr_1mm")
+      for (i in seq_along(monate)) {
+        df_regentage[[paste0(monate[i], "_Regentage_1mm")]] <- monat_regentage[[i]]
+      }
+      
+      df_regentage <- df_regentage[complete.cases(df_regentage), ]
+      
+      ergebnis_land <- regexpr("STATION ([A-Za-z]+(?: [A-Za-z]+)?)", inhalt)
+      ergebnis_name <- regexpr("\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}", inhalt)
+      ergebnis_staid <- regexpr("STAID:\\s*(\\d+)", inhalt)
+      ergebnis_latitude <- regexpr("LATITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      ergebnis_longitude <- regexpr("LONGITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      
+      if (any(ergebnis_land != -1) & any(ergebnis_staid != -1) & any(ergebnis_name != -1) & any(ergebnis_latitude != -1) & any(ergebnis_longitude != -1)) {
+        land <- str_extract(inhalt[ergebnis_land != -1], "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")
+        land <- str_match(land, "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")[, 2]
+        name <- str_extract(inhalt[ergebnis_name != -1], "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")
+        name <- str_match(name, "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")[, 2]
+        staid <- str_extract(inhalt[ergebnis_staid != -1], "STAID:\\s*(\\d+)")
+        staid <- str_match(staid, "STAID:\\s*(\\d+)")[, 2]
+        latitude <- str_extract(inhalt[ergebnis_latitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        longitude <- str_extract(inhalt[ergebnis_longitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        
+        df_metadata <- data.frame(Land = land, Station_ID = staid, Station_Name = name, Breitengrad = latitude, Längengrad = longitude)
+        merged_df <- merge(df_regentage, df_metadata, by = NULL)
+        
+        return(merged_df)
+      } else {
+        return("Das Land oder die Station ID konnte nicht gefunden werden.")
+      }
+    } else {
+      return("Regentage konnten nicht gefunden werden.")
+    }
+  }
+  
+  alle_dateien <- list.files(ordnerpfad, full.names = TRUE)
+  alle_dfs <- lapply(alle_dateien, verarbeite_datei)
+  alle_dfs <- Filter(function(x) inherits(x, "data.frame"), alle_dfs)
+  
+  if (length(alle_dfs) > 0) {
+    gesamt_df <- bind_rows(alle_dfs)
+    
+   
+    gesamt_df_clean <- gesamt_df %>% 
+      filter_all(all_vars(. != -99999))
+    fertig <- gesamt_df_clean %>% 
+      filter_all(all_vars(. != -9999))
+   
+    monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+
+
+    for (monat in monate) {
+    
+    spaltenname <- paste0(monat, "_Regentage_1mm")
+  
+    
+    if (spaltenname %in% colnames(fertig)) {
+    
+    fertig[[spaltenname]] <- ifelse(fertig[[spaltenname]] != "0",
+                                    substr(fertig[[spaltenname]], 1, nchar(fertig[[spaltenname]]) - 2),
+                                    fertig[[spaltenname]])
+      }
+    }
+   
+    zu_loeschende_laender <- c("ISRAEL", "KAZAKHSTAN", "TURKMENISTAN", "EGYPT", "ARMENIA", "ALGERIA", 
+                               "MOROCCO", "TUNISIA", "AZERBAIJAN", "LIBYAN ARAB", "SYRIAN ARAB", 
+                               "UZBEKISTAN", "GEORGIA", "IRAN", "KYRGYZSTAN", "TAJIKISTAN")
+    
+    
+    fertig <- subset(fertig, !(Land %in% zu_loeschende_laender))
+    
+   
+    fertig$Land <- ifelse(fertig$Land == "T", "TURKEY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "SVALBARD AND", "NORWAY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "BOSNIA AND", "BOSNIA AND HERZEGOVINA", fertig$Land)
+    
+    
+    fertig$Breitengrad_d <- sapply(fertig$Breitengrad, dms_to_dd)
+    
+   
+    fertig$Längengrad_d <- sapply(fertig$Längengrad, dms_to_dd)
+    
+    fertig$Längengrad_d <- ifelse(grepl("-", fertig$Längengrad), paste0("-", fertig$Längengrad_d), fertig$Längengrad_d)
+    replace_minus <- function(value) {
+    ifelse(startsWith(value, "--"), paste0("-", substr(value, 3, nchar(value))), value)
+}
+
+   
+    fertig <- fertig %>%
+      mutate(Längengrad_d = replace_minus(Längengrad_d))
+    fertig <- fertig %>%
+      select(-Längengrad, -Breitengrad)
+    return(fertig)
+  } else {
+    print("Keine gültigen Dataframes gefunden.")
+    return(NULL)
+  }
+}
+
+
+gesamt_df_1 <- read_and_process_regendaten_1("Regendaten_1/")
+```
+
+
+```{r}
+#Gleiche Funktion für die Textdateien R75p
+read_and_process_regendaten_R75p <- function(ordnerpfad) {
+  dms_to_dd <- function(coord) {
+    parts <- strsplit(coord, ":")[[1]]
+    deg <- as.numeric(parts[1])
+    min <- as.numeric(parts[2])
+    sec <- as.numeric(parts[3])
+    if (deg < 0) {
+        deg <- abs(deg)  
+    }
+    dd <- deg + (min / 60) + (sec / 3600)
+    return(dd)
+  }
+  
+  verarbeite_datei <- function(dateipfad) {
+    inhalt <- readLines(dateipfad, encoding = "UTF-8")
+    ergebnis_regentage <- regexpr("^\\s*\\d+\\s+(\\d{4})\\s+(\\d+)\\s+", inhalt)
+    
+    if (any(ergebnis_regentage != -1)) {
+      jahre <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\s{2})\\d{4}(?=\\s)")
+      regentage <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\d{4}\\s)\\d+")
+      regentage <- ifelse(regentage != "0", substr(regentage, 1, nchar(regentage) - 2), regentage)
+      regentage <- as.numeric(regentage)
+      
+      jahre <- as.numeric(jahre)
+      index <- jahre >= 1970
+      jahre <- jahre[index]
+      regentage <- regentage[index]
+      
+      monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+      start_pos <- c(68, 76, 84, 92, 102, 108, 116, 124, 132, 140, 148, 156)
+      stop_pos <- c(74, 82, 90, 98, 106, 114, 122, 130, 138, 146, 154, 162)
+      monat_regentage <- lapply(seq_along(monate), function(i) {
+        regentage <- substr(inhalt[ergebnis_regentage != -1], start = start_pos[i], stop = stop_pos[i])
+        regentage <- as.numeric(regentage)
+        regentage[index]
+      })
+      
+      df_regentage <- data.frame(Jahr = jahre, Regentage_pro_Jahr_R75p = regentage)
+      names(df_regentage) <- c("Jahr", "Regentage_pro_Jahr_R75p")
+      for (i in seq_along(monate)) {
+        df_regentage[[paste0(monate[i], "_Regentage_R75p")]] <- monat_regentage[[i]]
+      }
+      
+      df_regentage <- df_regentage[complete.cases(df_regentage), ]
+      
+      ergebnis_land <- regexpr("STATION ([A-Za-z]+(?: [A-Za-z]+)?)", inhalt)
+      ergebnis_name <- regexpr("\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}", inhalt)
+      ergebnis_staid <- regexpr("STAID:\\s*(\\d+)", inhalt)
+      ergebnis_latitude <- regexpr("LATITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      ergebnis_longitude <- regexpr("LONGITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      
+      if (any(ergebnis_land != -1) & any(ergebnis_staid != -1) & any(ergebnis_name != -1) & any(ergebnis_latitude != -1) & any(ergebnis_longitude != -1)) {
+        land <- str_extract(inhalt[ergebnis_land != -1], "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")
+        land <- str_match(land, "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")[, 2]
+        name <- str_extract(inhalt[ergebnis_name != -1], "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")
+        name <- str_match(name, "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")[, 2]
+        staid <- str_extract(inhalt[ergebnis_staid != -1], "STAID:\\s*(\\d+)")
+        staid <- str_match(staid, "STAID:\\s*(\\d+)")[, 2]
+        latitude <- str_extract(inhalt[ergebnis_latitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        longitude <- str_extract(inhalt[ergebnis_longitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        
+        df_metadata <- data.frame(Land = land, Station_ID = staid, Station_Name = name, Breitengrad = latitude, Längengrad = longitude)
+        merged_df <- merge(df_regentage, df_metadata, by = NULL)
+        
+        return(merged_df)
+      } else {
+        return("Das Land oder die Station ID konnte nicht gefunden werden.")
+      }
+    } else {
+      return("Regentage konnten nicht gefunden werden.")
+    }
+  }
+  
+  alle_dateien <- list.files(ordnerpfad, full.names = TRUE)
+  alle_dfs <- lapply(alle_dateien, verarbeite_datei)
+  alle_dfs <- Filter(function(x) inherits(x, "data.frame"), alle_dfs)
+  
+  if (length(alle_dfs) > 0) {
+    gesamt_df <- bind_rows(alle_dfs)
+    
+   
+    gesamt_df_clean <- gesamt_df %>% 
+      filter_all(all_vars(. != -99999))
+    fertig <- gesamt_df_clean %>% 
+      filter_all(all_vars(. != -9999))
+   
+    monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+
+    
+    for (monat in monate) {
+    
+    spaltenname <- paste0(monat, "_Regentage_R75p")
+  
+    
+    if (spaltenname %in% colnames(fertig)) {
+    
+    fertig[[spaltenname]] <- ifelse(fertig[[spaltenname]] != "0",
+                                    substr(fertig[[spaltenname]], 1, nchar(fertig[[spaltenname]]) - 2),
+                                    fertig[[spaltenname]])
+      }
+    }
+    
+    zu_loeschende_laender <- c("ISRAEL", "KAZAKHSTAN", "TURKMENISTAN", "EGYPT", "ARMENIA", "ALGERIA", 
+                               "MOROCCO", "TUNISIA", "AZERBAIJAN", "LIBYAN ARAB", "SYRIAN ARAB", 
+                               "UZBEKISTAN", "GEORGIA", "IRAN", "KYRGYZSTAN", "TAJIKISTAN")
+    
+    
+    fertig <- subset(fertig, !(Land %in% zu_loeschende_laender))
+    
+    
+    fertig$Land <- ifelse(fertig$Land == "T", "TURKEY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "SVALBARD AND", "NORWAY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "BOSNIA AND", "BOSNIA AND HERZEGOVINA", fertig$Land)
+    
+    
+    fertig$Breitengrad_d <- sapply(fertig$Breitengrad, dms_to_dd)
+    
+    
+    fertig$Längengrad_d <- sapply(fertig$Längengrad, dms_to_dd)
+    
+    fertig$Längengrad_d <- ifelse(grepl("-", fertig$Längengrad), paste0("-", fertig$Längengrad_d), fertig$Längengrad_d)
+    replace_minus <- function(value) {
+    ifelse(startsWith(value, "--"), paste0("-", substr(value, 3, nchar(value))), value)
+}
+
+    
+    fertig <- fertig %>%
+      mutate(Längengrad_d = replace_minus(Längengrad_d))
+    fertig <- fertig %>%
+      select(-Längengrad, -Breitengrad)
+    return(fertig)
+  } else {
+    print("Keine gültigen Dataframes gefunden.")
+    return(NULL)
+  }
+}
+
+
+gesamt_df_r75p <- read_and_process_regendaten_R75p("Regendaten_R75p/")
+```
+
+
+```{r}
+#Gleiche Funktion für die Textdateien R95p
+read_and_process_regendaten_R95p <- function(ordnerpfad) {
+  dms_to_dd <- function(coord) {
+    parts <- strsplit(coord, ":")[[1]]
+    deg <- as.numeric(parts[1])
+    min <- as.numeric(parts[2])
+    sec <- as.numeric(parts[3])
+    if (deg < 0) {
+        deg <- abs(deg)  
+    }
+    dd <- deg + (min / 60) + (sec / 3600)
+    return(dd)
+  }
+ 
+  verarbeite_datei <- function(dateipfad) {
+    inhalt <- readLines(dateipfad, encoding = "UTF-8")
+    ergebnis_regentage <- regexpr("^\\s*\\d+\\s+(\\d{4})\\s+(\\d+)\\s+", inhalt)
+    
+    if (any(ergebnis_regentage != -1)) {
+      jahre <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\s{2})\\d{4}(?=\\s)")
+      regentage <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\d{4}\\s)\\d+")
+      regentage <- ifelse(regentage != "0", substr(regentage, 1, nchar(regentage) - 2), regentage)
+      regentage <- as.numeric(regentage)
+      
+      jahre <- as.numeric(jahre)
+      index <- jahre >= 1970
+      jahre <- jahre[index]
+      regentage <- regentage[index]
+      
+      monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+      start_pos <- c(68, 76, 84, 92, 102, 108, 116, 124, 132, 140, 148, 156)
+      stop_pos <- c(74, 82, 90, 98, 106, 114, 122, 130, 138, 146, 154, 162)
+      monat_regentage <- lapply(seq_along(monate), function(i) {
+        regentage <- substr(inhalt[ergebnis_regentage != -1], start = start_pos[i], stop = stop_pos[i])
+        regentage <- as.numeric(regentage)
+        regentage[index]
+      })
+      
+      df_regentage <- data.frame(Jahr = jahre, Regentage_pro_Jahr_R95p = regentage)
+      names(df_regentage) <- c("Jahr", "Regentage_pro_Jahr_R95p")
+      for (i in seq_along(monate)) {
+        df_regentage[[paste0(monate[i], "_Regentage_R95p")]] <- monat_regentage[[i]]
+      }
+      
+      df_regentage <- df_regentage[complete.cases(df_regentage), ]
+      
+      ergebnis_land <- regexpr("STATION ([A-Za-z]+(?: [A-Za-z]+)?)", inhalt)
+      ergebnis_name <- regexpr("\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}", inhalt)
+      ergebnis_staid <- regexpr("STAID:\\s*(\\d+)", inhalt)
+      ergebnis_latitude <- regexpr("LATITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      ergebnis_longitude <- regexpr("LONGITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      
+      if (any(ergebnis_land != -1) & any(ergebnis_staid != -1) & any(ergebnis_name != -1) & any(ergebnis_latitude != -1) & any(ergebnis_longitude != -1)) {
+        land <- str_extract(inhalt[ergebnis_land != -1], "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")
+        land <- str_match(land, "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")[, 2]
+        name <- str_extract(inhalt[ergebnis_name != -1], "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")
+        name <- str_match(name, "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")[, 2]
+        staid <- str_extract(inhalt[ergebnis_staid != -1], "STAID:\\s*(\\d+)")
+        staid <- str_match(staid, "STAID:\\s*(\\d+)")[, 2]
+        latitude <- str_extract(inhalt[ergebnis_latitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        longitude <- str_extract(inhalt[ergebnis_longitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        
+        df_metadata <- data.frame(Land = land, Station_ID = staid, Station_Name = name, Breitengrad = latitude, Längengrad = longitude)
+        merged_df <- merge(df_regentage, df_metadata, by = NULL)
+        
+        return(merged_df)
+      } else {
+        return("Das Land oder die Station ID konnte nicht gefunden werden.")
+      }
+    } else {
+      return("Regentage konnten nicht gefunden werden.")
+    }
+  }
+  
+  alle_dateien <- list.files(ordnerpfad, full.names = TRUE)
+  alle_dfs <- lapply(alle_dateien, verarbeite_datei)
+  alle_dfs <- Filter(function(x) inherits(x, "data.frame"), alle_dfs)
+  
+  if (length(alle_dfs) > 0) {
+    gesamt_df <- bind_rows(alle_dfs)
+    
+    
+    gesamt_df_clean <- gesamt_df %>% 
+      filter_all(all_vars(. != -99999))
+    fertig <- gesamt_df_clean %>% 
+      filter_all(all_vars(. != -9999))
+    
+    monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+
+    
+    for (monat in monate) {
+    
+    spaltenname <- paste0(monat, "_Regentage_R95p")
+  
+   
+    if (spaltenname %in% colnames(fertig)) {
+    # Bedingte Anpassung der Werte
+    fertig[[spaltenname]] <- ifelse(fertig[[spaltenname]] != "0",
+                                    substr(fertig[[spaltenname]], 1, nchar(fertig[[spaltenname]]) - 2),
+                                    fertig[[spaltenname]])
+      }
+    }
+    
+    zu_loeschende_laender <- c("ISRAEL", "KAZAKHSTAN", "TURKMENISTAN", "EGYPT", "ARMENIA", "ALGERIA", 
+                               "MOROCCO", "TUNISIA", "AZERBAIJAN", "LIBYAN ARAB", "SYRIAN ARAB", 
+                               "UZBEKISTAN", "GEORGIA", "IRAN", "KYRGYZSTAN", "TAJIKISTAN")
+    
+    
+    fertig <- subset(fertig, !(Land %in% zu_loeschende_laender))
+    
+    
+    fertig$Land <- ifelse(fertig$Land == "T", "TURKEY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "SVALBARD AND", "NORWAY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "BOSNIA AND", "BOSNIA AND HERZEGOVINA", fertig$Land)
+    
+    
+    fertig$Breitengrad_d <- sapply(fertig$Breitengrad, dms_to_dd)
+    
+   
+    fertig$Längengrad_d <- sapply(fertig$Längengrad, dms_to_dd)
+    
+    fertig$Längengrad_d <- ifelse(grepl("-", fertig$Längengrad), paste0("-", fertig$Längengrad_d), fertig$Längengrad_d)
+    replace_minus <- function(value) {
+    ifelse(startsWith(value, "--"), paste0("-", substr(value, 3, nchar(value))), value)
+}
+
+    
+    fertig <- fertig %>%
+      mutate(Längengrad_d = replace_minus(Längengrad_d))
+    fertig <- fertig %>%
+      select(-Längengrad, -Breitengrad)
+    return(fertig)
+  } else {
+    print("Keine gültigen Dataframes gefunden.")
+    return(NULL)
+  }
+}
+
+
+gesamt_df_R95p <- read_and_process_regendaten_R95p("Regendaten_R95p/")
+```
+
+
+```{r}
+#Gleiche Funktion für die Textdateien R99p
+read_and_process_regendaten_R99p <- function(ordnerpfad) {
+  dms_to_dd <- function(coord) {
+    parts <- strsplit(coord, ":")[[1]]
+    deg <- as.numeric(parts[1])
+    min <- as.numeric(parts[2])
+    sec <- as.numeric(parts[3])
+    if (deg < 0) {
+        deg <- abs(deg)  
+    }
+    dd <- deg + (min / 60) + (sec / 3600)
+    return(dd)
+  }
+  
+  verarbeite_datei <- function(dateipfad) {
+    inhalt <- readLines(dateipfad, encoding = "UTF-8")
+    ergebnis_regentage <- regexpr("^\\s*\\d+\\s+(\\d{4})\\s+(\\d+)\\s+", inhalt)
+    
+    if (any(ergebnis_regentage != -1)) {
+      jahre <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\s{2})\\d{4}(?=\\s)")
+      regentage <- str_extract(inhalt[ergebnis_regentage != -1], "(?<=\\d{4}\\s)\\d+")
+      regentage <- ifelse(regentage != "0", substr(regentage, 1, nchar(regentage) - 2), regentage)
+      regentage <- as.numeric(regentage)
+      
+      jahre <- as.numeric(jahre)
+      index <- jahre >= 1970
+      jahre <- jahre[index]
+      regentage <- regentage[index]
+      
+      monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+      start_pos <- c(68, 76, 84, 92, 102, 108, 116, 124, 132, 140, 148, 156)
+      stop_pos <- c(74, 82, 90, 98, 106, 114, 122, 130, 138, 146, 154, 162)
+      monat_regentage <- lapply(seq_along(monate), function(i) {
+        regentage <- substr(inhalt[ergebnis_regentage != -1], start = start_pos[i], stop = stop_pos[i])
+        regentage <- as.numeric(regentage)
+        regentage[index]
+      })
+      
+      df_regentage <- data.frame(Jahr = jahre, Regentage_pro_Jahr_R99p = regentage)
+      names(df_regentage) <- c("Jahr", "Regentage_pro_Jahr_R99p")
+      for (i in seq_along(monate)) {
+        df_regentage[[paste0(monate[i], "_Regentage_R99p")]] <- monat_regentage[[i]]
+      }
+      
+      df_regentage <- df_regentage[complete.cases(df_regentage), ]
+      
+      ergebnis_land <- regexpr("STATION ([A-Za-z]+(?: [A-Za-z]+)?)", inhalt)
+      ergebnis_name <- regexpr("\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}", inhalt)
+      ergebnis_staid <- regexpr("STAID:\\s*(\\d+)", inhalt)
+      ergebnis_latitude <- regexpr("LATITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      ergebnis_longitude <- regexpr("LONGITUDE:\\s+\\w+:\\w+:\\w+\\s([-+]?\\d+:\\d+:\\d+)", inhalt)
+      
+      if (any(ergebnis_land != -1) & any(ergebnis_staid != -1) & any(ergebnis_name != -1) & any(ergebnis_latitude != -1) & any(ergebnis_longitude != -1)) {
+        land <- str_extract(inhalt[ergebnis_land != -1], "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")
+        land <- str_match(land, "STATION ([A-Za-z]+(?: [A-Za-z]+)?)")[, 2]
+        name <- str_extract(inhalt[ergebnis_name != -1], "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")
+        name <- str_match(name, "\\s{10,}(\\S+(?:\\s+\\S+)*)\\s{10,}")[, 2]
+        staid <- str_extract(inhalt[ergebnis_staid != -1], "STAID:\\s*(\\d+)")
+        staid <- str_match(staid, "STAID:\\s*(\\d+)")[, 2]
+        latitude <- str_extract(inhalt[ergebnis_latitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        longitude <- str_extract(inhalt[ergebnis_longitude != -1], "\\s([-+]?\\d+:\\d+:\\d+)")
+        
+        df_metadata <- data.frame(Land = land, Station_ID = staid, Station_Name = name, Breitengrad = latitude, Längengrad = longitude)
+        merged_df <- merge(df_regentage, df_metadata, by = NULL)
+        
+        return(merged_df)
+      } else {
+        return("Das Land oder die Station ID konnte nicht gefunden werden.")
+      }
+    } else {
+      return("Regentage konnten nicht gefunden werden.")
+    }
+  }
+  
+  alle_dateien <- list.files(ordnerpfad, full.names = TRUE)
+  alle_dfs <- lapply(alle_dateien, verarbeite_datei)
+  alle_dfs <- Filter(function(x) inherits(x, "data.frame"), alle_dfs)
+  
+  if (length(alle_dfs) > 0) {
+    gesamt_df <- bind_rows(alle_dfs)
+    
+    
+    gesamt_df_clean <- gesamt_df %>% 
+      filter_all(all_vars(. != -99999))
+    fertig <- gesamt_df_clean %>% 
+      filter_all(all_vars(. != -9999))
+    
+    monate <- c("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+
+    
+    for (monat in monate) {
+    
+    spaltenname <- paste0(monat, "_Regentage_R99p")
+  
+    
+    if (spaltenname %in% colnames(fertig)) {
+   
+    fertig[[spaltenname]] <- ifelse(fertig[[spaltenname]] != "0",
+                                    substr(fertig[[spaltenname]], 1, nchar(fertig[[spaltenname]]) - 2),
+                                    fertig[[spaltenname]])
+      }
+    }
+    
+    zu_loeschende_laender <- c("ISRAEL", "KAZAKHSTAN", "TURKMENISTAN", "EGYPT", "ARMENIA", "ALGERIA", 
+                               "MOROCCO", "TUNISIA", "AZERBAIJAN", "LIBYAN ARAB", "SYRIAN ARAB", 
+                               "UZBEKISTAN", "GEORGIA", "IRAN", "KYRGYZSTAN", "TAJIKISTAN")
+    
+    
+    fertig <- subset(fertig, !(Land %in% zu_loeschende_laender))
+    
+    
+    fertig$Land <- ifelse(fertig$Land == "T", "TURKEY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "SVALBARD AND", "NORWAY", fertig$Land)
+    fertig$Land <- ifelse(fertig$Land == "BOSNIA AND", "BOSNIA AND HERZEGOVINA", fertig$Land)
+    
+    
+    fertig$Breitengrad_d <- sapply(fertig$Breitengrad, dms_to_dd)
+    
+   
+    fertig$Längengrad_d <- sapply(fertig$Längengrad, dms_to_dd)
+    
+    fertig$Längengrad_d <- ifelse(grepl("-", fertig$Längengrad), paste0("-", fertig$Längengrad_d), fertig$Längengrad_d)
+    replace_minus <- function(value) {
+    ifelse(startsWith(value, "--"), paste0("-", substr(value, 3, nchar(value))), value)
+}
+
+    
+    fertig <- fertig %>%
+      mutate(Längengrad_d = replace_minus(Längengrad_d))
+    fertig <- fertig %>%
+      select(-Längengrad, -Breitengrad)
+    return(fertig)
+  } else {
+    print("Keine gültigen Dataframes gefunden.")
+    return(NULL)
+  }
+}
+
+
+gesamt_df_R99p <- read_and_process_regendaten_R99p("Regendaten_R99p/")
+```
+
+
+```{r}
+
+#Dataframes in einen zusammenfügen
+gesamt_df <- gesamt_df_10 %>%
+  merge(gesamt_df_20, by = c("Jahr", "Land", "Station_ID", "Breitengrad_d","Längengrad_d", "Station_Name"), all = TRUE)
+
+gesamt_df <- gesamt_df %>%
+  merge(gesamt_df_1, by = c("Jahr", "Land", "Station_ID", "Breitengrad_d","Längengrad_d", "Station_Name"), all = TRUE)
+
+gesamt_df <- gesamt_df %>%
+  merge(gesamt_df_r75p, by = c("Jahr", "Land", "Station_ID", "Breitengrad_d","Längengrad_d", "Station_Name"), all = TRUE)
+
+gesamt_df <- gesamt_df %>%
+  merge(gesamt_df_R95p, by = c("Jahr", "Land", "Station_ID", "Breitengrad_d","Längengrad_d",  "Station_Name"), all = TRUE)
+
+gesamt_df <- gesamt_df %>%
+  merge(gesamt_df_R99p, by = c("Jahr", "Land", "Station_ID", "Breitengrad_d","Längengrad_d",  "Station_Name"), all = TRUE)
+
+```
+
+
+```{r}
+
+#Asiatische Teil von Russland löschen und das Land Libanon rauslöschen
+gesamt_df <- gesamt_df %>%
+  filter(!(gesamt_df$Längengrad_d>65.0 & regendaten$Land == "RUSSIAN FEDERATION"))
+gesamt_df <- subset(gesamt_df, Land != "LEBANON")
+
+```
+
+
+```{r}
+
+#Umwandelung der Grossgeschriebenen Wörter in der Spalte Land und Station_Name zu Wörter, bei welchen nur der Anfangsbuchstabe gross ist
+capitalize <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  if(nchar(x) > 1) {
+    paste(substr(x, 1, 1), tolower(substr(x, 2, nchar(x))), sep = "")
+  } else {
+    x
+  }
+}
+
+# Anwenden der Funktion auf die Spalte text_spalte
+gesamt_df$Land <- sapply(gesamt_df$Land, capitalize)
+gesamt_df$Station_Name <- sapply(gesamt_df$Station_Name, capitalize)
+
+#Manuelle Umwandlung bei Ländern mit zwei Wörter
+gesamt_df$Land <- ifelse(gesamt_df$Land == "United kingdom", "United Kingdom", gesamt_df$Land)
+gesamt_df$Land <- ifelse(gesamt_df$Land == "Russian federation", "Russia", gesamt_df$Land)
+gesamt_df$Land <- ifelse(gesamt_df$Land == "Bosnia and herzegovina", "Bosnia and Herz.", gesamt_df$Land)
+gesamt_df$Land <- ifelse(gesamt_df$Land == "North macedonia", "North Macedonia", gesamt_df$Land)  
+gesamt_df$Land <- ifelse(gesamt_df$Land == "Czech republic", "Czechia", gesamt_df$Land)
+
+```
+
+
+```{r}
+#Entfernen der Zeilen welche das gleiche Jahr und gleiche Station_Id haben
+gesamt_df <- gesamt_df[!duplicated(gesamt_df[c("Jahr", "Station_ID")]), ]
+
+#Umwandlung der Spalten, ohne die erwähnten Spalten, zu numerischen Werten
+gesamt_df <- gesamt_df %>%
+  mutate_at(vars(-c(Station_ID, Station_Name, Land, Jahr)), as.numeric)
+
+
+#Erstzten von einzelnen Werte welche in den Textdateien falsch sind
+gesamt_df$Breitengrad_d <- ifelse(gesamt_df$Station_ID == 22002, 49.7167, gesamt_df$Breitengrad_d)
+gesamt_df$Längengrad_d <- ifelse(gesamt_df$Station_ID == 22002, 5.3167, gesamt_df$Längengrad_d)
+
+gesamt_df$Breitengrad_d <- ifelse(gesamt_df$Station_ID == 21999, 49.9333, gesamt_df$Breitengrad_d)
+gesamt_df$Längengrad_d <- ifelse(gesamt_df$Station_ID == 21999, 5.0167, gesamt_df$Längengrad_d)
+
+gesamt_df$Breitengrad_d <- ifelse(gesamt_df$Station_ID == 21984, 50.15, gesamt_df$Breitengrad_d)
+gesamt_df$Längengrad_d <- ifelse(gesamt_df$Station_ID == 21984, 4.2667, gesamt_df$Längengrad_d)
+
+gesamt_df$Land <- ifelse(gesamt_df$Station_ID == 22001, "France", gesamt_df$Land)
+
+```
+
+
+```{r}
+#Löschen von Stationen welche kein Regen gemessen haben 
+gesamt_df <- gesamt_df %>%
+  filter(!(Regentage_pro_Jahr_1mm == 0))
+
+#Löschen von Ländern welche kaum Daten haben
+gesamt_df <- gesamt_df %>%
+   filter(!(Land %in% c("Gibraltar", "Malta")))
+
+```
+
+
+```{r}
+
+#Aufteilen des gesamten Dataframe in 3 Teilen um nicht zu grosse Dateien zu bekommen. Erstellen von CSV Dateien
+regendaten_teil1 <- gesamt_df[1:231945, ]
+#write.csv(regendaten_teil1, "regendaten_teil1.csv", row.names = FALSE)
+
+# Teil 2
+regendaten_teil2 <- gesamt_df[231946:463890, ]
+#write.csv(regendaten_teil2, "regendaten_teil2.csv", row.names = FALSE)
+
+# Teil 3
+regendaten_teil3 <- gesamt_df[463891:694524, ]
+#write.csv(regendaten_teil3, "regendaten_teil3.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+
+#Erstellen eines Dataframes welche die Durchschnittswerte für jedes Land pro Jahr, Monate und Niederschlagsintensität besitzt
+new_df <- gesamt_df
+
+new_df <- subset(new_df, select = -c(Station_ID, Breitengrad_d, Längengrad_d, Station_Name))
+                                                                          
+new_df <- new_df %>%
+  group_by(Land, Jahr) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE)) %>%
+  ungroup()
+
+#Runden der Werte auf zwei Nachkommastellen, erstellen der CSV Datei
+new_df<- new_df %>%
+  mutate_if(is.numeric, ~ifelse(!is.na(.), round(., 2), .))
+
+#write.csv(new_df, "new_df.csv",  row.names = FALSE)
+
+
+
+```
+
+```
